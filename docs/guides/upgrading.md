@@ -10,6 +10,7 @@ Valkeyrie 0.9 stores some keys with new bytes. It does not open a store that Val
 - [Migrate a SQLite Store](#migrate-a-sqlite-store)
 - [Keys with a NUL Byte](#keys-with-a-nul-byte)
 - [Migrate the Store of a Custom Driver](#migrate-the-store-of-a-custom-driver)
+- [Drivers That Declare Their Key Format](#drivers-that-declare-their-key-format)
 
 ## What Changed
 
@@ -40,7 +41,7 @@ Valkeyrie 0.9 records the key format in each store, in a row that no key can add
 | Has entries and no key format row (Valkeyrie 0.8 or earlier wrote it) | Valkeyrie throws `KeyFormatError` with `found: 1` and changes nothing. |
 | Has another key format | Valkeyrie throws `KeyFormatError` and changes nothing. |
 
-The check applies to every driver, the built-in SQLite driver and custom drivers.
+The check applies to every driver, the built-in SQLite driver and custom drivers, unless the driver declares its key format (see [Drivers That Declare Their Key Format](#drivers-that-declare-their-key-format)).
 
 ```typescript
 import { KeyFormatError, Valkeyrie } from 'valkeyrie';
@@ -109,7 +110,7 @@ Key format 1 cannot always tell two keys apart, so the migration cannot always f
 A custom driver stores each entry under the hex key hash that Valkeyrie gives it. `migrateKeyHash()` turns a key hash in key format 1 into the key hash of the same key in key format 2.
 
 1. Stop every process that uses the store, and back up the store.
-2. Create a new, empty store for your driver. Open it one time with `Valkeyrie.open(driverFn)` to record key format 2, then close it.
+2. Create a new, empty store for your driver. Open it one time with `Valkeyrie.open(driverFn)` to record key format 2, then close it. A driver that declares key format 2 needs no record: skip the open.
 3. Copy each entry from the old store to the new store. Give it the key hash `migrateKeyHash(oldKeyHash)`, and keep its value, versionstamp and expiry time.
 4. Check the new store, then switch your application to it.
 
@@ -121,3 +122,29 @@ migrateKeyHash('010000'); // '0100ff00'
 ```
 
 Do not change the key hashes in the old store. As the example shows, the new hash of one entry can be the old hash of another entry. `migrateKeyHash()` throws for a key hash that Valkeyrie 0.8 cannot read; see [Keys with a NUL Byte](#keys-with-a-nul-byte).
+
+## Drivers That Declare Their Key Format
+
+The key format row costs a commit and a row in every store, also in a store that is opened and never written to. A driver whose stores hold only key format 2, because no earlier version of Valkeyrie wrote to them or because you migrated them, can declare it instead:
+
+```typescript
+import type { Driver } from 'valkeyrie/driver';
+
+const driver: Driver = {
+  // ...the other methods
+  keyFormat: 2,
+};
+```
+
+When the driver declares a key format:
+
+| The driver declares | The store | What happens |
+| --- | --- | --- |
+| Another key format than this version reads | Any store | Valkeyrie throws `KeyFormatError` and changes nothing. |
+| Key format 2 | Has no key format row | Valkeyrie opens the store, without a commit and without writing a row. It does not check the entries: the driver vouches for them. |
+| Key format 2 | Has a key format row of key format 2 | Valkeyrie opens the store. |
+| Key format 2 | Has a key format row of another format | Valkeyrie throws `KeyFormatError` and changes nothing. |
+
+`clear()` then deletes the entries without a commit and writes no key format row.
+
+Declare the number, not "the current format": when a later version of Valkeyrie changes the key format, it rejects a driver that still declares 2 instead of reading its rows in the wrong format. Declare a key format only for stores that you know hold no rows in key format 1. Valkeyrie cannot tell the formats apart by their bytes.

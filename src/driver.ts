@@ -28,6 +28,14 @@ export interface Driver {
   ) => ReadableStream<
     (DriverValue | { keyHash: string; value: null; versionstamp: null })[]
   >
+  /**
+   * The key format of every row in the store, if the driver knows it, for
+   * example because no earlier version of Valkeyrie wrote to its stores.
+   * Valkeyrie then trusts it: it keeps no key format row in the store and does
+   * not check the entries. Leave it out to let Valkeyrie record the key format
+   * in the store.
+   */
+  keyFormat?: number
 }
 
 export function defineDriver(

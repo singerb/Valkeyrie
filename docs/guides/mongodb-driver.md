@@ -9,6 +9,7 @@ The MongoDB driver stores a Valkeyrie database in MongoDB instead of a SQLite fi
 - [Client Ownership](#client-ownership)
 - [Namespaces](#namespaces)
 - [Documents and Indexes](#documents-and-indexes)
+- [Key Format](#key-format)
 - [Expiry and Cleanup](#expiry-and-cleanup)
 - [Atomic Commits](#atomic-commits)
 - [Watching Keys](#watching-keys)
@@ -52,6 +53,7 @@ The options are:
 | `dbName`                 | the database of the connection string | The MongoDB database                              |
 | `collectionName`         | `'valkeyrie'`                         | The collection of the entries                     |
 | `sequenceCollectionName` | `'valkeyrie_sequences'`               | The collection of the versionstamp counters       |
+| `keyFormat`              | (none)                                | The key format of the stored entries; see [Key Format](#key-format) |
 
 ## Client Ownership
 
@@ -85,7 +87,7 @@ Each entry is one document in the entries collection:
 | `versionstamp` | the versionstamp, 20 hex characters                                    |
 | `expiresAt`    | the expiry time in milliseconds, only on entries with an expiry        |
 
-Two rows of each namespace are not entries, and `list()` never returns them: the key format row that Valkeyrie writes, and the commit lock row that the driver writes (see [Atomic Commits](#atomic-commits)). Their `keyHash` starts with `ff`, which no key starts with.
+Two rows of each namespace are not entries, and `list()` never returns them: the key format row that Valkeyrie writes (see [Key Format](#key-format)), and the commit lock row that the driver writes (see [Atomic Commits](#atomic-commits)). Their `keyHash` starts with `ff`, which no key starts with.
 
 The sequences collection holds one document per namespace, with the counter for versionstamps in `sequence`. A versionstamp is the time in microseconds shifted left by 20 bits, OR the low 20 bits of the counter, as with SQLite. `clear` keeps the counter, and `destroy` deletes it.
 
@@ -96,6 +98,22 @@ The driver creates these indexes when it opens a database:
 - `{ namespace: 1 }`, unique, on the sequences
 
 Valkeyrie orders keys by their bytes, so the entries collection must compare strings by their bytes too: it must not have a default collation other than `simple`. The driver checks this when it opens a database and throws if the collection has another collation.
+
+## Key Format
+
+By default, Valkeyrie records the key format of each namespace in a row when it first opens the namespace, in a commit, and checks the row each time it opens the namespace. So a namespace that is opened and never written to still gets two documents: the key format row and the commit lock row.
+
+If no Valkeyrie before 0.9 wrote to the collection, or you migrated it (see [Upgrading to 0.9](./upgrading.md)), set `keyFormat: 2`:
+
+```typescript
+const db = await Valkeyrie.open(
+  mongodbDriver({ client, namespace: 'my-app', keyFormat: 2 })
+);
+```
+
+Valkeyrie then opens and clears a namespace without a commit and writes no key format row, so a namespace that is never written to has no documents. It still reads the key format row of a namespace that has one, and refuses a namespace whose row has another format. See [Drivers That Declare Their Key Format](./upgrading.md#drivers-that-declare-their-key-format).
+
+`keyFormat` is not the default, because the driver cannot know whether an earlier driver wrote to the collection. Without it, Valkeyrie throws `KeyFormatError` for a namespace with entries in key format 1, instead of reading them in the wrong format.
 
 ## Expiry and Cleanup
 
@@ -124,7 +142,7 @@ Watchers get the value that was written, not a value read back after the write: 
 
 ## Compatibility
 
-- The server must be a replica set or a sharded cluster, because commits use transactions. A single-node replica set works for development. A standalone server rejects the first commit, which `Valkeyrie.open()` already makes.
+- The server must be a replica set or a sharded cluster, because commits use transactions. A single-node replica set works for development. A standalone server rejects the first commit, which `Valkeyrie.open()` makes unless the driver declares its key format.
 - MongoDB 7.0 or later. The test suite runs on MongoDB 7.0 and 8.0.
 - The `mongodb` Node.js driver 6 or 7. The driver imports nothing from it at run time and uses only APIs that work the same from version 4 on, but the test suite runs with version 7.
 

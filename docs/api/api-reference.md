@@ -76,14 +76,14 @@ static async open(
 
 **Parameters:**
 - `path` - Optional file path. Omit for in-memory database
-- `driverFn` - A `DriverFactory`: a function that receives the resolved serializer factory and returns a `Promise<Driver>`. Implement the `Driver` interface (import the `Driver` type and `defineDriver` helper from `'valkeyrie/driver'`) for your own backend.
+- `driverFn` - A `DriverFactory`: a function that receives the resolved serializer factory and returns a `Promise<Driver>`. Implement the `Driver` interface (import the `Driver` type and `defineDriver` helper from `'valkeyrie/driver'`) for your own backend. A driver whose stores no earlier version of Valkeyrie wrote can set `keyFormat` on the `Driver` to declare the key format of its rows; see [Upgrading to 0.9](../guides/upgrading.md#drivers-that-declare-their-key-format).
 - `options` - Configuration options
   - `serializer` - Custom serializer (default: V8 serializer). Passed through to `driverFn` when a custom backend is used.
   - `destroyOnClose` - Delete the underlying storage on close (default: `false`)
 
 **Returns:** `Promise<Valkeyrie>`
 
-**Throws:** [`KeyFormatError`](#keyformaterror) if the store has entries in another key format, for example a store that Valkeyrie 0.8 wrote. `open()` then changes nothing. An empty store gets the current key format. See [Upgrading to 0.9](../guides/upgrading.md).
+**Throws:** [`KeyFormatError`](#keyformaterror) if the store has entries in another key format, for example a store that Valkeyrie 0.8 wrote, or the driver declares another key format. `open()` then changes nothing. An empty store gets the current key format. See [Upgrading to 0.9](../guides/upgrading.md).
 
 **Example:**
 ```typescript
@@ -792,11 +792,11 @@ migrateKeyHash('0100ff00'); // '0100ffff00', the key [new Uint8Array([0, 255])]
 
 ### KeyFormatError
 
-Thrown by `open()`, `from()` and `fromAsync()` when the store has entries in another key format. Valkeyrie then changes nothing in the store.
+Thrown by `open()`, `from()` and `fromAsync()` when the store has entries in another key format, or its driver declares another key format. Valkeyrie then changes nothing in the store.
 
 ```typescript
 class KeyFormatError extends Error {
-  found: number | null; // 1 for a store that Valkeyrie 0.8 or earlier wrote
+  found: number | null; // 1 for a store that Valkeyrie 0.8 or earlier wrote, or the key format the driver declares
   expected: number;
 }
 ```

@@ -580,11 +580,16 @@ export class Valkeyrie<TRegistry extends SchemaRegistryType = readonly []> {
 
   /**
    * Clears all data from the database but keeps the database file.
-   * The data and format marker change in one transaction.
+   * The data and format marker change in one transaction. A driver that
+   * declares its key format keeps no format marker.
    * This operation cannot be undone and will result in permanent data loss.
    * @returns A promise that resolves when the database has been cleared
    */
   public async clear(): Promise<void> {
+    if (this.#driver.keyFormat !== undefined) {
+      await this.#driver.clear()
+      return
+    }
     await this.#driver.withTransaction(async () => {
       await this.#driver.clear()
       // Keep the format marker visible to other connections until the clear

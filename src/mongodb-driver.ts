@@ -38,6 +38,14 @@ export interface MongodbDriverOptions {
   collectionName?: string
   /** The collection of the versionstamp counters. Default: `valkeyrie_sequences`. */
   sequenceCollectionName?: string
+  /**
+   * The key format of every entry in the collection. Set it when no earlier
+   * version of Valkeyrie wrote to the collection, or after you migrated it:
+   * Valkeyrie then writes no key format row, so a namespace that is opened
+   * but never written to has no documents. Leave it out to let Valkeyrie
+   * record and check the key format of each namespace.
+   */
+  keyFormat?: number
 }
 
 type WatchEvent = (
@@ -196,6 +204,7 @@ export function mongodbDriver({
   dbName,
   collectionName = 'valkeyrie',
   sequenceCollectionName = 'valkeyrie_sequences',
+  keyFormat,
 }: MongodbDriverOptions): DriverFactory {
   validateNamespace(namespace)
   validateNamespaceField(namespaceField)
@@ -362,6 +371,7 @@ export function mongodbDriver({
     }
 
     const driver: Driver = {
+      ...(keyFormat === undefined ? {} : { keyFormat }),
       get: async (keyHash, now) => {
         const doc = await entries.findOne(
           { ...scope, keyHash, ...live(now) },

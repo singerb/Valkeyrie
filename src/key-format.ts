@@ -53,10 +53,29 @@ export async function writeKeyFormat(driver: Driver): Promise<void> {
  * format row was written by Valkeyrie 0.8 or earlier. Its bytes cannot tell
  * the two formats apart, so a key could address another entry.
  *
+ * A driver that declares its key format replaces this check: Valkeyrie writes
+ * no row and does not look for entries. A row that the store already has must
+ * still agree, so a store that another version of Valkeyrie recorded is not
+ * opened.
+ *
  * @param driver - The driver of the store.
- * @throws {KeyFormatError} If the store has entries in another key format.
+ * @throws {KeyFormatError} If the store has entries in another key format, or
+ * the driver declares another key format.
  */
 export async function checkKeyFormat(driver: Driver): Promise<void> {
+  if (driver.keyFormat !== undefined) {
+    if (driver.keyFormat !== KEY_FORMAT) {
+      throw new KeyFormatError(driver.keyFormat, KEY_FORMAT)
+    }
+    const formatRow = await driver.get(KEY_FORMAT_KEY_HASH, 0)
+    if (formatRow !== undefined) {
+      const found = readKeyFormat(formatRow.value)
+      if (found !== KEY_FORMAT) {
+        throw new KeyFormatError(found, KEY_FORMAT)
+      }
+    }
+    return
+  }
   await driver.withTransaction(async () => {
     // An entry without an expiry matches every `now`, so 0 finds the row
     const formatRow = await driver.get(KEY_FORMAT_KEY_HASH, 0)
