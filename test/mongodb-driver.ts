@@ -9,7 +9,12 @@ import { jsonSerializer } from '../src/serializers/json.ts'
 import type { Serializer } from '../src/serializers/serializer.ts'
 import { v8Serializer } from '../src/serializers/v8.ts'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
-import { type DriverFactory, type Key, Valkeyrie } from '../src/valkeyrie.ts'
+import {
+  type DriverFactory,
+  type Key,
+  KeyFormatError,
+  Valkeyrie,
+} from '../src/valkeyrie.ts'
 import {
   removeNamespace,
   testDbName,
@@ -779,6 +784,56 @@ describe(
       } finally {
         await driver.close()
       }
+    })
+
+    await test('with a declared key format, a namespace that is never written to has no documents', async () => {
+      const name = namespace()
+      const db = await Valkeyrie.open(
+        mongodbDriver({
+          client: connect(),
+          namespace: name as string,
+          dbName: testDbName,
+          keyFormat: 2,
+        }),
+      )
+      try {
+        await db.cleanup()
+        assert.strictEqual((await db.get(['k'])).value, null)
+        await db.clear()
+        assert.strictEqual(await entries.countDocuments({ namespace: name }), 0)
+        assert.strictEqual(
+          await sequences.countDocuments({ namespace: name }),
+          0,
+        )
+
+        // Writes work as without a declared key format.
+        await db.set(['k'], 'v')
+        assert.ok((await db.atomic().sum(['n'], 1n).commit()).ok)
+        assert.strictEqual((await db.get(['k'])).value, 'v')
+        assert.strictEqual(
+          await entries.countDocuments({
+            namespace: name,
+            keyHash: KEY_FORMAT_KEY_HASH,
+          }),
+          0,
+        )
+      } finally {
+        await db.close()
+      }
+    })
+
+    await test('Valkeyrie rejects a declared key format of another version', async () => {
+      await assert.rejects(
+        Valkeyrie.open(
+          mongodbDriver({
+            client: connect(),
+            namespace: namespace() as string,
+            dbName: testDbName,
+            keyFormat: 3,
+          }),
+        ),
+        new KeyFormatError(3, 2),
+      )
     })
 
     await test('destroy deletes every document of the namespace', async () => {

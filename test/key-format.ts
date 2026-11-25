@@ -16,7 +16,11 @@ import { migrateKeyHash, migrateSqliteKeyFormat } from '../src/migrate.ts'
 import { jsonSerializer } from '../src/serializers/json.ts'
 import { v8Serializer } from '../src/serializers/v8.ts'
 import { sqliteDriver } from '../src/sqlite-driver.ts'
-import { KeyFormatError, Valkeyrie } from '../src/valkeyrie.ts'
+import {
+  type DriverFactory,
+  KeyFormatError,
+  Valkeyrie,
+} from '../src/valkeyrie.ts'
 
 const tempPath = () => join(tmpdir(), `valkeyrie-key-format-${randomUUID()}.db`)
 
@@ -284,6 +288,143 @@ describe('key format', async () => {
     } finally {
       await db.close()
     }
+  })
+
+  /**
+   * A SQLite driver that declares a key format, as a driver whose stores no
+   * earlier version wrote can do. It counts the commits that it starts.
+   */
+  const declaringDriver =
+    (path: string, keyFormat: number, commits = { count: 0 }): DriverFactory =>
+    async (serializer) => {
+      const driver = await sqliteDriver(path, serializer)
+      return {
+        ...driver,
+        keyFormat,
+        withTransaction: (callback) => {
+          commits.count++
+          return driver.withTransaction(callback)
+        },
+      }
+    }
+
+  await test('open() with a declared key format writes no key format row and starts no commit', async () => {
+    await withStores(async (source) => {
+      const commits = { count: 0 }
+      const db = await Valkeyrie.open(declaringDriver(source, 2, commits))
+      await db.close()
+      assert.strictEqual(commits.count, 0)
+
+      const observer = await sqliteDriver(source)
+      try {
+        assert.strictEqual(
+          await observer.get(KEY_FORMAT_KEY_HASH, 0),
+          undefined,
+        )
+      } finally {
+        await observer.close()
+      }
+    })
+  })
+
+  await test('open() trusts a declared key format for a store with entries and no key format row', async () => {
+    await withStores(async (source) => {
+      const driver = await sqliteDriver(source)
+      // ['a'] in key format 2
+      await driver.set('026100', 'value', '00000000000000000001')
+      await driver.close()
+
+      const db = await Valkeyrie.open(declaringDriver(source, 2))
+      try {
+        assert.strictEqual((await db.get(['a'])).value, 'value')
+      } finally {
+        await db.close()
+      }
+    })
+  })
+
+  await test('open() with a declared key format opens a store whose key format row agrees', async () => {
+    await withStores(async (source) => {
+      const db = await Valkeyrie.open(source)
+      await db.set(['a'], 'value')
+      await db.close()
+
+      const declared = await Valkeyrie.open(declaringDriver(source, 2))
+      try {
+        assert.strictEqual((await declared.get(['a'])).value, 'value')
+      } finally {
+        await declared.close()
+      }
+    })
+  })
+
+  await test('open() rejects a declared key format of another version, and does not change the store', async () => {
+    for (const keyFormat of [1, 3]) {
+      await withStores(async (source) => {
+        await assert.rejects(
+          Valkeyrie.open(declaringDriver(source, keyFormat)),
+          new KeyFormatError(keyFormat, 2),
+        )
+        const observer = await sqliteDriver(source)
+        try {
+          assert.deepStrictEqual(await observer.list('', '￿', '', 0, 10), [])
+        } finally {
+          await observer.close()
+        }
+      })
+    }
+  })
+
+  await test('open() rejects a declared key format when the key format row of the store disagrees', async () => {
+    await withStores(async (source) => {
+      const driver = await sqliteDriver(source)
+      await driver.set(
+        KEY_FORMAT_KEY_HASH,
+        { keyFormat: 3 },
+        await driver.generateVersionstamp(),
+      )
+      await driver.close()
+
+      await assert.rejects(
+        Valkeyrie.open(declaringDriver(source, 2)),
+        new KeyFormatError(3, 2),
+      )
+      await assert.rejects(
+        Valkeyrie.from([{ id: 'bob' }], {
+          driverFn: declaringDriver(source, 2),
+          prefix: ['users'],
+          keyProperty: 'id',
+        }),
+        new KeyFormatError(3, 2),
+      )
+    })
+  })
+
+  await test('clear() with a declared key format writes no key format row and starts no commit', async () => {
+    await withStores(async (source) => {
+      const commits = { count: 0 }
+      const db = await Valkeyrie.open(declaringDriver(source, 2, commits))
+      const stream = db.watch([['a']])
+      const reader = stream.getReader()
+      try {
+        assert.strictEqual((await reader.read()).value?.[0]?.value, null)
+        await db.set(['a'], 'value')
+        assert.strictEqual((await reader.read()).value?.[0]?.value, 'value')
+        await db.clear()
+        assert.strictEqual((await reader.read()).value?.[0]?.value, null)
+        assert.strictEqual(commits.count, 0)
+      } finally {
+        await reader.cancel()
+        await db.close()
+      }
+
+      const observer = await sqliteDriver(source)
+      try {
+        assert.deepStrictEqual(await observer.list('', '￿', '', 0, 10), [])
+      } finally {
+        await observer.close()
+      }
+    })
   })
 
   await test('migrateKeyHash() should return the hash of the same key in the current key format', () => {

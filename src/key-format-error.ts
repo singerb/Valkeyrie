@@ -6,9 +6,10 @@
  */
 export class KeyFormatError extends Error {
   /**
-   * The key format of the store. 1 is a store with entries and no key format
-   * row, written by Valkeyrie 0.8 or earlier. null is a key format row without
-   * a valid number.
+   * The key format of the store: from its key format row, or the one that its
+   * driver declares. 1 is also a store with entries and no key format row,
+   * written by Valkeyrie 0.8 or earlier. null is a key format row without a
+   * valid number.
    */
   public readonly found: number | null
   /** The key format that this version of Valkeyrie reads and writes. */
